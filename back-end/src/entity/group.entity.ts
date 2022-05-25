@@ -37,12 +37,4 @@ export class Group {
     this.ltmt = input.ltmt
     this.student_count = 0
   }
-  public prepareToUpdate(input: UpdateGroupInput) {
-    if (input.name !== undefined) this.name = input.name
-    if (input.number_of_weeks !== undefined) this.number_of_weeks = input.number_of_weeks
-    if (input.roll_states !== undefined) this.roll_states = input.roll_states
-    if (input.incidents !== undefined) this.incidents = input.incidents
-    if (input.ltmt !== undefined) this.ltmt = input.ltmt
-    this.student_count = 0
-  }
 }

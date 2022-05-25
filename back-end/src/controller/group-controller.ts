@@ -1,10 +1,21 @@
-import { getRepository } from "typeorm"
+import { getRepository, Between, Raw } from "typeorm"
 import { NextFunction, Request, Response } from "express"
 import { Group } from "../entity/group.entity"
+import { GroupStudent } from "../entity/group-student.entity"
+import { Roll } from "../entity/roll.entity"
 import { CreateGroupInput } from "../interface/group.interface"
+import { CreateGroupStudentInput } from "../interface/group-student.interface"
+import { endDate, startDate, currentDate } from "../utils/dateConverter"
+import { StudentRollState } from "../entity/student-roll-state.entity"
+import { Student } from "../entity/student.entity"
+import { studentResponse } from "../utils/objectConverter"
 
 export class GroupController {
   private groupRepository = getRepository(Group)
+  private groupStudentRepository = getRepository(GroupStudent)
+  private rollRepository = getRepository(Roll)
+  private studentRollState = getRepository(StudentRollState)
+  private student = getRepository(Student)
 
   async allGroups(request: Request, response: Response, next: NextFunction) {
     // Task 1: 
@@ -24,9 +35,9 @@ export class GroupController {
       incidents: params.incidents,
       ltmt: params.ltmt
     }
-    const roll = new Group()
-    roll.prepareToCreate(createGroupInput)
-    return this.groupRepository.save(roll)
+    const group = new Group()
+    group.prepareToCreate(createGroupInput)
+    return this.groupRepository.save(group)
   }
 
   async updateGroup(request: Request, response: Response, next: NextFunction) {
@@ -46,7 +57,9 @@ export class GroupController {
       groupToUpdate.roll_states = params.roll_states
       groupToUpdate.incidents = params.incidents
       groupToUpdate.ltmt = params.ltmt
-
+      groupToUpdate.run_at = null
+      groupToUpdate.student_count = 0
+      
       return this.groupRepository.save(groupToUpdate)
     }
   }
@@ -69,18 +82,85 @@ export class GroupController {
 
   async getGroupStudents(request: Request, response: Response, next: NextFunction) {
     // Task 1: 
-        
+    const group_id = request.params.id
+    const findGroup = await this.groupRepository.findOne(group_id)
+    if(findGroup === undefined){
+      return {msg:"Invalid GroupId"}
+    }
+    const studentData= await this.student.createQueryBuilder('s')
+                .innerJoinAndSelect(GroupStudent, "GS", "s.id=GS.student_id")
+                .where("GS.group_id = :id", { id: group_id })
+                .orderBy('s.id')
+                .getMany()
+    
     // Return the list of Students that are in a Group
+    return studentResponse(studentData)
   }
 
 
   async runGroupFilters(request: Request, response: Response, next: NextFunction) {
     // Task 2:
-  
+    const end_date = endDate()
+   
     // 1. Clear out the groups (delete all the students from the groups)
+    await this.groupStudentRepository.clear()
 
     // 2. For each group, query the student rolls to see which students match the filter for the group
+    const groups = await this.groupRepository.find()
+    
+    groups.forEach(async(group)=>{
+      const start_date = startDate(group.number_of_weeks)
+      const current_Date = currentDate()
+      const map = new Map()
+      const studentData= await this.studentRollState.createQueryBuilder('s')
+                .innerJoinAndSelect(Roll, "r", "r.id=s.roll_id")
+                .where("s.state = :state", { state: group.roll_states })
+                .andWhere(`r.completed_at BETWEEN '${start_date}' AND '${end_date}'`)
+                .getMany()
+      
+      studentData.forEach(item => {
+        if(map.get(item.student_id)){
+          map.set(item.student_id,map.get(item.student_id)+1)
+        }else{
+          map.set(item.student_id,1);
+        }
+      })
+      
+      const studentGroupInput: CreateGroupStudentInput = {
+        group_id: group.id,
+        student_id: 0,
+        incident_count: 0,
+      }
+      // 3. Add the list of students that match the filter to the group
+      let count_no_of_student = 0
+      map.forEach((value,key)=>{
+        const groupStudent = new GroupStudent()
+        if(group.ltmt==='<'){
+          if(value < group.incidents){
+            count_no_of_student++
+            studentGroupInput.student_id = key
+            studentGroupInput.incident_count = value
+            groupStudent.prepareToCreate(studentGroupInput)
+            this.groupStudentRepository.save(groupStudent)
+          }
+        }else{
+          if(value > group.incidents){
+            count_no_of_student++
+            studentGroupInput.student_id = key
+            studentGroupInput.incident_count = value
+            groupStudent.prepareToCreate(studentGroupInput)
+            this.groupStudentRepository.save(groupStudent)
+          }
+        }
+      })
 
-    // 3. Add the list of students that match the filter to the group
+      // Update the group for run_at and student_count
+      const groupToUpdate = await this.groupRepository.findOne(group.id)
+      groupToUpdate.run_at = current_Date
+      groupToUpdate.student_count = count_no_of_student
+      this.groupRepository.save(groupToUpdate)
+      
+    })
+    return { msg : "Successfully run the group filters"}
   }
 }
